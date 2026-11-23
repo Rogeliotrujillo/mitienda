@@ -1,0 +1,6 @@
+{
+  "name": "Mi tienda",
+  "description": "Aplicación de gestión de stock, ventas y reportes por voz para vendedores del Mercado Público de Penonomé.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
