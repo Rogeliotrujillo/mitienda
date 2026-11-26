@@ -166,9 +166,9 @@ export function MetricsScreen({ products, movements }: MetricsScreenProps) {
       {/* 1. Resumen principal claro y directo */}
       <section aria-label="Resumen de ventas e inventario">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="rounded-2xl bg-[#0F172A] p-5 text-white shadow-sm">
+          <div className="rounded-2xl bg-[#0F172A] p-4 text-white shadow-sm sm:p-5">
             <p className="text-sm font-medium text-[#CBD5E1]">Vendido hoy</p>
-            <p className="font-display mt-1 text-4xl font-extrabold tabular-nums">
+            <p className="font-display mt-1 text-3xl font-extrabold tabular-nums sm:text-4xl">
               {formatBalboas(soldToday)}
             </p>
             <p className="mt-2 text-xs text-[#CBD5E1] tabular-nums sm:text-sm">
@@ -177,11 +177,11 @@ export function MetricsScreen({ products, movements }: MetricsScreenProps) {
             </p>
           </div>
 
-          <div className="rounded-2xl border border-[#CBD5E1] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="rounded-2xl border border-[#CBD5E1] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] sm:p-5">
             <p className="text-sm font-medium text-[#64748B]">
               Vendido esta semana
             </p>
-            <p className="font-display mt-1 text-4xl font-extrabold text-[#0F172A] tabular-nums">
+            <p className="font-display mt-1 text-3xl font-extrabold text-[#0F172A] tabular-nums sm:text-4xl">
               {formatBalboas(soldThisWeek)}
             </p>
             <p className="mt-2 text-xs font-medium text-[#64748B] tabular-nums sm:text-sm">
@@ -192,8 +192,8 @@ export function MetricsScreen({ products, movements }: MetricsScreenProps) {
 
         {/* Estado del stock en una sola fila limpia */}
         <div className="mt-3 grid grid-cols-3 divide-x divide-[#E2E8F0] rounded-2xl border border-[#CBD5E1] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-          <div className="flex flex-col items-center justify-center px-3 py-3 text-center sm:flex-row sm:justify-between sm:px-5 sm:py-3.5">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col items-center justify-center px-2 py-3 text-center sm:flex-row sm:justify-between sm:px-5 sm:py-3.5">
+            <div className="flex items-center gap-1.5 sm:gap-2">
               <span
                 className="h-2.5 w-2.5 shrink-0 rounded-full bg-[#DC2626]"
                 aria-hidden="true"
@@ -207,8 +207,8 @@ export function MetricsScreen({ products, movements }: MetricsScreenProps) {
             </span>
           </div>
 
-          <div className="flex flex-col items-center justify-center px-3 py-3 text-center sm:flex-row sm:justify-between sm:px-5 sm:py-3.5">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col items-center justify-center px-2 py-3 text-center sm:flex-row sm:justify-between sm:px-5 sm:py-3.5">
+            <div className="flex items-center gap-1.5 sm:gap-2">
               <span
                 className="h-2.5 w-2.5 shrink-0 rounded-full bg-[#D97706]"
                 aria-hidden="true"
@@ -222,8 +222,8 @@ export function MetricsScreen({ products, movements }: MetricsScreenProps) {
             </span>
           </div>
 
-          <div className="flex flex-col items-center justify-center px-3 py-3 text-center sm:flex-row sm:justify-between sm:px-5 sm:py-3.5">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col items-center justify-center px-2 py-3 text-center sm:flex-row sm:justify-between sm:px-5 sm:py-3.5">
+            <div className="flex items-center gap-1.5 sm:gap-2">
               <span
                 className="h-2.5 w-2.5 shrink-0 rounded-full bg-[#16A34A]"
                 aria-hidden="true"
@@ -294,7 +294,7 @@ export function MetricsScreen({ products, movements }: MetricsScreenProps) {
             </div>
           </div>
 
-          <div className="mt-4 grid h-44 grid-cols-7 items-end gap-2 pt-2">
+          <div className="mt-4 grid h-44 grid-cols-7 items-end gap-1 pt-2 sm:gap-2">
             {dailySeries.map((day, idx) => {
               const rawVal =
                 chartMetric === "sales" ? day.salesBalboas : day.entriesQty;
@@ -322,16 +322,16 @@ export function MetricsScreen({ products, movements }: MetricsScreenProps) {
                       ? formatBalboas(day.salesBalboas)
                       : `${formatQuantity(day.entriesQty)} entradas`
                   }`}
-                  className="flex h-full flex-col items-center justify-end gap-1.5 focus-visible:outline-2 focus-visible:outline-[#1D4ED8]"
+                  className="flex h-full min-w-0 flex-col items-center justify-end gap-1.5 focus-visible:outline-2 focus-visible:outline-[#1D4ED8]"
                 >
-                  <span className="text-[11px] font-semibold text-[#475569] tabular-nums">
+                  <span className="max-w-full truncate text-[10px] font-semibold text-[#475569] tabular-nums sm:text-[11px]">
                     {rawVal > 0
                       ? chartMetric === "sales"
                         ? rawVal.toFixed(0)
                         : formatQuantity(rawVal)
                       : "0"}
                   </span>
-                  <div className="flex h-28 w-full items-end justify-center rounded-t-md bg-[#F8FAFC] px-1">
+                  <div className="flex h-28 w-full items-end justify-center rounded-t-md bg-[#F8FAFC] px-0.5 sm:px-1">
                     <motion.div
                       initial={false}
                       animate={{ scaleY: ratio }}
@@ -341,7 +341,7 @@ export function MetricsScreen({ products, movements }: MetricsScreenProps) {
                     />
                   </div>
                   <span
-                    className={`text-xs font-semibold ${
+                    className={`text-[11px] font-semibold sm:text-xs ${
                       isSelected
                         ? "text-[#0F172A] underline decoration-[#1D4ED8] decoration-2 underline-offset-4"
                         : "text-[#64748B]"

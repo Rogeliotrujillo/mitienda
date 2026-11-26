@@ -6,6 +6,11 @@
 }
 
 @layer base {
+  html,
+  body {
+    overflow-x: clip;
+  }
+
   html {
     font-family: var(--font-sans);
     background-color: #f4f5f7;

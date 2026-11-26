@@ -8,6 +8,13 @@ export type ScreenId =
 
 export type TrafficLightStatus = "red" | "yellow" | "green";
 
+export interface AuthUser {
+  id: string;
+  username: string;
+  displayName: string;
+  storeName: string;
+}
+
 export interface Product {
   id: string;
   name: string;

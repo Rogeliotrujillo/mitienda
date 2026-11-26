@@ -13,6 +13,13 @@ import {
   analyzeInventoryQuery,
 } from "../utils/inventoryQuery";
 import {
+  SPEECH_LANG_FALLBACKS,
+  SpeechRecognitionLike,
+  extractSpeechTranscript,
+  getSpeechRecognitionCtor,
+  mapSpeechErrorMessage,
+} from "../utils/speechRecognition";
+import {
   AddProductModal,
   NewProductInput,
   getSingularUnit,
@@ -34,50 +41,6 @@ interface StockScreenProps {
 }
 
 type FilterKey = "all" | TrafficLightStatus;
-
-interface SpeechRecognitionAlternativeLike {
-  transcript: string;
-}
-
-interface SpeechRecognitionResultLike {
-  isFinal: boolean;
-  length: number;
-  [index: number]: SpeechRecognitionAlternativeLike;
-}
-
-interface SpeechRecognitionEventLike extends Event {
-  results: {
-    length: number;
-    [index: number]: SpeechRecognitionResultLike;
-  };
-}
-
-interface SpeechRecognitionErrorEventLike extends Event {
-  error: string;
-}
-
-interface SpeechRecognitionLike extends EventTarget {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  maxAlternatives: number;
-  start: () => void;
-  stop: () => void;
-  abort: () => void;
-  onresult: ((ev: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((ev: SpeechRecognitionErrorEventLike) => void) | null;
-  onend: (() => void) | null;
-}
-
-type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
-
-function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
-  const win = window as unknown as {
-    SpeechRecognition?: SpeechRecognitionCtor;
-    webkitSpeechRecognition?: SpeechRecognitionCtor;
-  };
-  return win.SpeechRecognition || win.webkitSpeechRecognition || null;
-}
 
 const STATUS_META: Record<
   TrafficLightStatus,
@@ -176,9 +139,77 @@ export function StockScreen({
     setIsListeningVoiceSearch(false);
   };
 
+  const launchVoiceSearchAttempt = (
+    SpeechCtor: NonNullable<ReturnType<typeof getSpeechRecognitionCtor>>,
+    langIndex: number
+  ) => {
+    const recognition = new SpeechCtor();
+    recognition.lang = SPEECH_LANG_FALLBACKS[langIndex] ?? "es";
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognitionRef.current = recognition;
+
+    let ended = false;
+
+    recognition.onresult = (event) => {
+      const { combinedText } = extractSpeechTranscript(event.results);
+      latestTranscriptRef.current = combinedText;
+      if (combinedText) {
+        setSearchText(combinedText);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      if (event.error === "aborted") {
+        setIsListeningVoiceSearch(false);
+        return;
+      }
+
+      if (
+        event.error === "language-not-supported" &&
+        !latestTranscriptRef.current.trim() &&
+        langIndex + 1 < SPEECH_LANG_FALLBACKS.length
+      ) {
+        ended = true;
+        launchVoiceSearchAttempt(SpeechCtor, langIndex + 1);
+        return;
+      }
+
+      setIsListeningVoiceSearch(false);
+      const mapped = mapSpeechErrorMessage(event.error);
+      setVoiceError(mapped.message);
+    };
+
+    recognition.onend = () => {
+      if (ended) return;
+      ended = true;
+      setIsListeningVoiceSearch(false);
+      const spoken = latestTranscriptRef.current.trim();
+      if (spoken) {
+        runVoiceQueryText(spoken);
+      }
+    };
+
+    try {
+      recognition.start();
+      setIsListeningVoiceSearch(true);
+    } catch {
+      setIsListeningVoiceSearch(false);
+      setVoiceError("No se pudo activar el micrófono.");
+    }
+  };
+
   const handleToggleVoiceSearch = () => {
     if (isListeningVoiceSearch) {
       stopVoiceSearch();
+      return;
+    }
+
+    if (typeof window !== "undefined" && window.isSecureContext === false) {
+      setVoiceError(
+        "El micrófono requiere conexión segura (HTTPS). Escribe tu pregunta o producto en el buscador."
+      );
       return;
     }
 
@@ -199,59 +230,7 @@ export function StockScreen({
       // Ignore
     }
 
-    const recognition = new SpeechCtor();
-    recognition.lang = "es-PA";
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
-    recognitionRef.current = recognition;
-
-    recognition.onresult = (event) => {
-      let text = "";
-      for (let i = 0; i < event.results.length; i++) {
-        text += (event.results[i][0]?.transcript ?? "") + " ";
-      }
-      const clean = text.replace(/\s+/g, " ").trim();
-      latestTranscriptRef.current = clean;
-      if (clean) {
-        setSearchText(clean);
-      }
-    };
-
-    recognition.onerror = (event) => {
-      setIsListeningVoiceSearch(false);
-      if (event.error === "aborted") return;
-      if (
-        event.error === "not-allowed" ||
-        event.error === "service-not-allowed"
-      ) {
-        setVoiceError(
-          "No hay permiso de micrófono. Actívalo en el navegador o escribe tu búsqueda."
-        );
-      } else if (event.error === "no-speech") {
-        setVoiceError("No se escuchó voz. Intenta de nuevo.");
-      } else {
-        setVoiceError(
-          "No pudimos escuchar el audio. Escribe tu búsqueda arriba."
-        );
-      }
-    };
-
-    recognition.onend = () => {
-      setIsListeningVoiceSearch(false);
-      const spoken = latestTranscriptRef.current.trim();
-      if (spoken) {
-        runVoiceQueryText(spoken);
-      }
-    };
-
-    try {
-      recognition.start();
-      setIsListeningVoiceSearch(true);
-    } catch {
-      setIsListeningVoiceSearch(false);
-      setVoiceError("No se pudo activar el micrófono.");
-    }
+    launchVoiceSearchAttempt(SpeechCtor, 0);
   };
 
   const clearSearchAndVoice = () => {
@@ -362,16 +341,16 @@ export function StockScreen({
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-6 sm:py-7">
       {/* Encabezado limpio con acciones de agregar */}
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm font-medium text-[#475569] tabular-nums">
           {products.length} productos · {availableCount} disponibles
         </p>
 
-        <div className="flex items-center gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
           <button
             type="button"
             onClick={() => openAddManualModal("")}
-            className="flex min-h-[44px] items-center gap-1.5 rounded-xl bg-[#1D4ED8] px-4 font-display text-sm font-semibold text-white transition-colors hover:bg-[#1E40AF] active:scale-[0.98] whitespace-nowrap sm:text-base"
+            className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-[#1D4ED8] px-3 font-display text-sm font-semibold text-white transition-colors hover:bg-[#1E40AF] active:scale-[0.98] whitespace-nowrap sm:px-4 sm:text-base"
           >
             <Plus className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>Agregar producto</span>
@@ -381,7 +360,7 @@ export function StockScreen({
             type="button"
             onClick={onOpenVoiceEntry}
             aria-label="Dictar entrada con micrófono"
-            className="flex min-h-[44px] items-center gap-1.5 rounded-xl border border-[#CBD5E1] bg-white px-3.5 font-display text-sm font-semibold text-[#0F172A] transition-colors hover:bg-[#F8FAFC] active:scale-[0.98] whitespace-nowrap sm:text-base"
+            className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-[#CBD5E1] bg-white px-3 font-display text-sm font-semibold text-[#0F172A] transition-colors hover:bg-[#F8FAFC] active:scale-[0.98] whitespace-nowrap sm:px-3.5 sm:text-base"
           >
             <Mic className="h-4 w-4 shrink-0 text-[#1D4ED8]" aria-hidden="true" />
             <span>Dictar</span>
@@ -414,7 +393,9 @@ export function StockScreen({
               }}
               placeholder="Buscar producto o preguntar por voz..."
               aria-label="Buscar producto o preguntar por stock"
-              className="min-h-[48px] w-full rounded-xl border border-[#CBD5E1] bg-white pr-22 pl-10 text-sm font-medium text-[#0F172A] shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:border-[#1D4ED8] focus:outline-none sm:text-base"
+              className={`min-h-[48px] w-full rounded-xl border border-[#CBD5E1] bg-white pl-10 text-base font-medium text-[#0F172A] shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:border-[#1D4ED8] focus:outline-none ${
+                searchText ? "pr-24" : "pr-14"
+              }`}
             />
 
             <div className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center gap-1">
@@ -454,7 +435,7 @@ export function StockScreen({
               aria-label="Elegir producto de la lista"
               value={selectedOptionId}
               onChange={(e) => handleSelectOption(e.target.value)}
-              className="min-h-[48px] w-full rounded-xl border border-[#CBD5E1] bg-white px-3.5 text-sm font-semibold text-[#0F172A] shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:border-[#1D4ED8] focus:outline-none sm:text-base"
+              className="min-h-[48px] w-full rounded-xl border border-[#CBD5E1] bg-white px-3.5 text-base font-semibold text-[#0F172A] shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:border-[#1D4ED8] focus:outline-none"
             >
               <option value="">Elegir de la lista ({products.length})</option>
               {products.map((p) => (
@@ -469,9 +450,16 @@ export function StockScreen({
         {isListeningVoiceSearch && (
           <div
             role="status"
-            className="rounded-xl border border-[#BFDBFE] bg-[#EFF6FF] px-4 py-2.5 text-sm font-semibold text-[#1E40AF]"
+            className="flex items-center justify-between gap-3 rounded-xl border border-[#BFDBFE] bg-[#EFF6FF] px-4 py-2.5 text-sm font-semibold text-[#1E40AF]"
           >
-            Escuchando... pregunta por un producto o estado de tu stock.
+            <span>Escuchando... di un producto o pregunta por tu stock.</span>
+            <button
+              type="button"
+              onClick={stopVoiceSearch}
+              className="min-h-[34px] shrink-0 rounded-lg bg-[#1D4ED8] px-3 text-xs font-semibold text-white hover:bg-[#1E40AF]"
+            >
+              Detener
+            </button>
           </div>
         )}
 
@@ -530,7 +518,7 @@ export function StockScreen({
           role="tab"
           aria-selected={filter === "all"}
           onClick={() => setFilter("all")}
-          className={`min-h-[42px] rounded-lg px-3 py-2 text-sm font-semibold transition-colors whitespace-nowrap ${
+          className={`min-h-[42px] rounded-lg px-2 py-2 text-xs font-semibold transition-colors whitespace-nowrap sm:px-3 sm:text-sm ${
             filter === "all"
               ? "bg-white text-[#0F172A] shadow-xs"
               : "text-[#475569] hover:text-[#0F172A]"
@@ -544,7 +532,7 @@ export function StockScreen({
           role="tab"
           aria-selected={filter === "red"}
           onClick={() => setFilter("red")}
-          className={`flex min-h-[42px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors whitespace-nowrap ${
+          className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition-colors whitespace-nowrap sm:gap-2 sm:px-3 sm:text-sm ${
             filter === "red"
               ? "bg-white text-[#0F172A] shadow-xs"
               : "text-[#475569] hover:text-[#0F172A]"
@@ -562,7 +550,7 @@ export function StockScreen({
           role="tab"
           aria-selected={filter === "yellow"}
           onClick={() => setFilter("yellow")}
-          className={`flex min-h-[42px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors whitespace-nowrap ${
+          className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition-colors whitespace-nowrap sm:gap-2 sm:px-3 sm:text-sm ${
             filter === "yellow"
               ? "bg-white text-[#0F172A] shadow-xs"
               : "text-[#475569] hover:text-[#0F172A]"
@@ -580,7 +568,7 @@ export function StockScreen({
           role="tab"
           aria-selected={filter === "green"}
           onClick={() => setFilter("green")}
-          className={`flex min-h-[42px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors whitespace-nowrap ${
+          className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition-colors whitespace-nowrap sm:gap-2 sm:px-3 sm:text-sm ${
             filter === "green"
               ? "bg-white text-[#0F172A] shadow-xs"
               : "text-[#475569] hover:text-[#0F172A]"
@@ -634,7 +622,7 @@ export function StockScreen({
               >
                 <div>
                   <div className="flex items-start justify-between gap-2">
-                    <h2 className="font-display text-xl font-bold leading-snug text-[#0F172A]">
+                    <h2 className="font-display min-w-0 break-words text-xl font-bold leading-snug text-[#0F172A]">
                       {product.name}
                     </h2>
 
@@ -648,9 +636,9 @@ export function StockScreen({
                     </button>
                   </div>
 
-                  <div className="mt-1 flex items-center gap-1.5">
+                  <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                     <span
-                      className={`h-2.5 w-2.5 rounded-full ${meta.dotClass}`}
+                      className={`h-2.5 w-2.5 shrink-0 rounded-full ${meta.dotClass}`}
                       aria-hidden="true"
                     />
                     <span

@@ -105,21 +105,21 @@ export function HomeScreen({ products, onNavigate }: HomeScreenProps) {
       {/* Dos botones secundarios profesionales de voz */}
       <section
         aria-label="Acciones por voz"
-        className="mx-auto grid w-full max-w-2xl grid-cols-2 gap-3.5 sm:gap-4"
+        className="mx-auto grid w-full max-w-2xl grid-cols-1 gap-3 min-[420px]:grid-cols-2 sm:gap-4"
       >
         <button
           type="button"
           onClick={() => onNavigate("voice-sale")}
-          className="group flex min-h-[76px] items-center justify-center gap-3.5 rounded-xl border border-[#CBD5E1] bg-white px-4 py-3 text-[#0F172A] shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-all duration-150 hover:border-[#1D4ED8] hover:bg-[#F8FAFC] active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4ED8]"
+          className="group flex min-h-[72px] items-center justify-start gap-3.5 rounded-xl border border-[#CBD5E1] bg-white px-4 py-3 text-[#0F172A] shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-all duration-150 hover:border-[#1D4ED8] hover:bg-[#F8FAFC] active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D4ED8] sm:min-h-[76px] sm:justify-center"
         >
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#1D4ED8] text-white shadow-xs transition-transform duration-150 group-hover:scale-105">
             <Mic className="h-5 w-5" aria-hidden="true" />
           </div>
-          <div className="text-left">
+          <div className="min-w-0 text-left">
             <span className="font-display block text-base font-bold leading-tight sm:text-lg">
               Dictar ventas
             </span>
-            <span className="hidden text-xs font-medium text-[#64748B] sm:block">
+            <span className="block text-xs font-medium text-[#64748B]">
               Registrar por voz
             </span>
           </div>
@@ -128,16 +128,16 @@ export function HomeScreen({ products, onNavigate }: HomeScreenProps) {
         <button
           type="button"
           onClick={() => onNavigate("voice-entry")}
-          className="group flex min-h-[76px] items-center justify-center gap-3.5 rounded-xl border border-[#CBD5E1] bg-white px-4 py-3 text-[#0F172A] shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-all duration-150 hover:border-[#0F172A] hover:bg-[#F8FAFC] active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F172A]"
+          className="group flex min-h-[72px] items-center justify-start gap-3.5 rounded-xl border border-[#CBD5E1] bg-white px-4 py-3 text-[#0F172A] shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-all duration-150 hover:border-[#0F172A] hover:bg-[#F8FAFC] active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0F172A] sm:min-h-[76px] sm:justify-center"
         >
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#0F172A] text-white shadow-xs transition-transform duration-150 group-hover:scale-105">
             <ArrowDownToLine className="h-5 w-5" aria-hidden="true" />
           </div>
-          <div className="text-left">
+          <div className="min-w-0 text-left">
             <span className="font-display block text-base font-bold leading-tight sm:text-lg">
               Dictar entrada
             </span>
-            <span className="hidden text-xs font-medium text-[#64748B] sm:block">
+            <span className="block text-xs font-medium text-[#64748B]">
               Ingreso por voz
             </span>
           </div>

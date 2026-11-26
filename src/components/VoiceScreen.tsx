@@ -6,6 +6,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Square,
   Trash2,
   X,
 } from "lucide-react";
@@ -16,6 +17,14 @@ import {
   formatBalboas,
   formatQuantity,
 } from "../types";
+import {
+  SPEECH_LANG_FALLBACKS,
+  SpeechRecognitionLike,
+  extractSpeechTranscript,
+  getSpeechRecognitionCtor,
+  isLikelyMobileDevice,
+  mapSpeechErrorMessage,
+} from "../utils/speechRecognition";
 import { parseVoiceTranscript } from "../utils/voiceParser";
 
 interface VoiceScreenProps {
@@ -26,52 +35,6 @@ interface VoiceScreenProps {
 }
 
 type VoiceStage = "ready" | "recording" | "confirm";
-
-interface SpeechRecognitionAlternativeLike {
-  transcript: string;
-}
-
-interface SpeechRecognitionResultLike {
-  isFinal: boolean;
-  length: number;
-  [index: number]: SpeechRecognitionAlternativeLike;
-}
-
-interface SpeechRecognitionEventLike extends Event {
-  resultIndex: number;
-  results: {
-    length: number;
-    [index: number]: SpeechRecognitionResultLike;
-  };
-}
-
-interface SpeechRecognitionErrorEventLike extends Event {
-  error: string;
-}
-
-interface SpeechRecognitionLike extends EventTarget {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  maxAlternatives: number;
-  start: () => void;
-  stop: () => void;
-  abort: () => void;
-  onresult: ((ev: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((ev: SpeechRecognitionErrorEventLike) => void) | null;
-  onend: (() => void) | null;
-  onspeechstart: (() => void) | null;
-}
-
-type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
-
-function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
-  const win = window as unknown as {
-    SpeechRecognition?: SpeechRecognitionCtor;
-    webkitSpeechRecognition?: SpeechRecognitionCtor;
-  };
-  return win.SpeechRecognition || win.webkitSpeechRecognition || null;
-}
 
 function createTempId(): string {
   return `voice-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -95,7 +58,10 @@ export function VoiceScreen({
   const [editingItem, setEditingItem] = useState<VoiceParsedItem | null>(null);
   const [batchKey, setBatchKey] = useState<number>(0);
 
-  const isHoldingRef = useRef<boolean>(false);
+  const recordingActiveRef = useRef<boolean>(false);
+  const stoppingRef = useRef<boolean>(false);
+  const abortedRef = useRef<boolean>(false);
+  const pointerDownAtRef = useRef<number>(0);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const finalTranscriptRef = useRef<string>("");
   const interimTranscriptRef = useRef<string>("");
@@ -129,6 +95,8 @@ export function VoiceScreen({
 
   useEffect(() => {
     return () => {
+      abortedRef.current = true;
+      recordingActiveRef.current = false;
       clearTimers();
       try {
         recognitionRef.current?.abort();
@@ -142,7 +110,7 @@ export function VoiceScreen({
     const clean = rawText.trim();
     if (!clean) {
       setErrorMsg(
-        "No se escuchó texto claro. Mantén presionado el botón mientras hablas."
+        "No se escuchó texto claro. Toca el botón, habla cerca del micrófono y toca Detener al terminar."
       );
       setStage(items.length > 0 ? "confirm" : "ready");
       return;
@@ -166,17 +134,19 @@ export function VoiceScreen({
   };
 
   const finishRecording = () => {
+    if (!recordingActiveRef.current && !stoppingRef.current) return;
+    recordingActiveRef.current = false;
+    stoppingRef.current = false;
     clearTimers();
-    const durationMs = Date.now() - startTimeRef.current;
     const combined = `${finalTranscriptRef.current} ${interimTranscriptRef.current}`
       .replace(/\s+/g, " ")
       .trim();
 
     setSpeechDetected(false);
 
-    if (durationMs < 350 && !combined) {
+    if (!combined) {
       setErrorMsg(
-        "Mantén el botón presionado mientras hablas y suéltalo al terminar."
+        "No se detectó voz clara. Toca el micrófono, habla cerca y luego toca Detener."
       );
       setStage(items.length > 0 ? "confirm" : "ready");
       return;
@@ -185,18 +155,116 @@ export function VoiceScreen({
     processTranscriptText(combined);
   };
 
-  const startRecording = (
-    pointerId?: number,
-    target?: HTMLButtonElement
-  ) => {
-    if (isHoldingRef.current) return;
+  const cancelRecording = () => {
+    abortedRef.current = true;
+    recordingActiveRef.current = false;
+    stoppingRef.current = false;
+    clearTimers();
+    setSpeechDetected(false);
+    setLiveText("");
+    try {
+      recognitionRef.current?.abort();
+    } catch {
+      // Ignore
+    }
+    recognitionRef.current = null;
+    setStage(items.length > 0 ? "confirm" : "ready");
+  };
 
-    if (pointerId !== undefined && target) {
-      try {
-        target.setPointerCapture(pointerId);
-      } catch {
-        // Ignore if unavailable
+  const launchRecognitionAttempt = (
+    SpeechCtor: NonNullable<ReturnType<typeof getSpeechRecognitionCtor>>,
+    langIndex: number
+  ) => {
+    const recognition = new SpeechCtor();
+    const lang = SPEECH_LANG_FALLBACKS[langIndex] ?? "es";
+    recognition.lang = lang;
+    recognition.continuous = !isLikelyMobileDevice();
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognitionRef.current = recognition;
+
+    let ended = false;
+
+    recognition.onspeechstart = () => {
+      setSpeechDetected(true);
+    };
+
+    recognition.onresult = (event) => {
+      const { finalText, interimText, combinedText } = extractSpeechTranscript(
+        event.results
+      );
+      finalTranscriptRef.current = finalText;
+      interimTranscriptRef.current = interimText;
+      setLiveText(combinedText);
+      if (combinedText) {
+        setSpeechDetected(true);
       }
+    };
+
+    recognition.onerror = (event) => {
+      if (abortedRef.current || event.error === "aborted") return;
+
+      const hasCapturedText = Boolean(
+        `${finalTranscriptRef.current} ${interimTranscriptRef.current}`.trim()
+      );
+
+      if (
+        event.error === "language-not-supported" &&
+        !hasCapturedText &&
+        langIndex + 1 < SPEECH_LANG_FALLBACKS.length
+      ) {
+        ended = true;
+        launchRecognitionAttempt(SpeechCtor, langIndex + 1);
+        return;
+      }
+
+      if (hasCapturedText && event.error === "no-speech") {
+        finishRecording();
+        return;
+      }
+
+      recordingActiveRef.current = false;
+      stoppingRef.current = false;
+      clearTimers();
+      setSpeechDetected(false);
+
+      const mapped = mapSpeechErrorMessage(event.error);
+      if (mapped.shouldOfferTextFallback) {
+        setShowTextInput(true);
+      }
+      setErrorMsg(mapped.message);
+      setStage(items.length > 0 ? "confirm" : "ready");
+    };
+
+    recognition.onend = () => {
+      if (ended || abortedRef.current) return;
+      ended = true;
+      finishRecording();
+    };
+
+    try {
+      recognition.start();
+    } catch {
+      recordingActiveRef.current = false;
+      stoppingRef.current = false;
+      clearTimers();
+      setShowTextInput(true);
+      setErrorMsg(
+        "No se pudo iniciar el micrófono en este navegador. Puedes escribir abajo los productos."
+      );
+      setStage(items.length > 0 ? "confirm" : "ready");
+    }
+  };
+
+  const startRecording = () => {
+    if (recordingActiveRef.current) return;
+
+    if (typeof window !== "undefined" && window.isSecureContext === false) {
+      setShowTextInput(true);
+      setErrorMsg(
+        "El micrófono requiere conexión segura (HTTPS). Puedes escribir abajo lo que vendiste o recibiste."
+      );
+      return;
     }
 
     const SpeechCtor = getSpeechRecognitionCtor();
@@ -215,104 +283,29 @@ export function VoiceScreen({
       // Ignore
     }
 
-    isHoldingRef.current = true;
+    abortedRef.current = false;
+    stoppingRef.current = false;
+    recordingActiveRef.current = true;
     finalTranscriptRef.current = "";
     interimTranscriptRef.current = "";
     setLiveText("");
     setErrorMsg(null);
     setElapsedSec(0);
     setSpeechDetected(false);
+    startTimeRef.current = Date.now();
+    setStage("recording");
 
-    const recognition = new SpeechCtor();
-    recognition.lang = "es-PA";
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
-    recognitionRef.current = recognition;
+    timerRef.current = window.setInterval(() => {
+      const sec = Math.floor((Date.now() - startTimeRef.current) / 1000);
+      setElapsedSec(sec);
+    }, 200);
 
-    let ended = false;
-
-    recognition.onspeechstart = () => {
-      setSpeechDetected(true);
-    };
-
-    recognition.onresult = (event) => {
-      let finals = "";
-      let interims = "";
-      for (let i = 0; i < event.results.length; i++) {
-        const res = event.results[i];
-        const txt = res[0]?.transcript ?? "";
-        if (res.isFinal) {
-          finals += txt + " ";
-        } else {
-          interims += txt + " ";
-        }
-      }
-      finalTranscriptRef.current = finals.trim();
-      interimTranscriptRef.current = interims.trim();
-      const preview = `${finals} ${interims}`.replace(/\s+/g, " ").trim();
-      setLiveText(preview);
-      if (preview) {
-        setSpeechDetected(true);
-      }
-    };
-
-    recognition.onerror = (event) => {
-      if (event.error === "aborted" || !isHoldingRef.current) return;
-      isHoldingRef.current = false;
-      clearTimers();
-      setSpeechDetected(false);
-
-      if (
-        event.error === "not-allowed" ||
-        event.error === "service-not-allowed"
-      ) {
-        setShowTextInput(true);
-        setErrorMsg(
-          "No hay permiso para usar el micrófono. Actívalo en el navegador o escríbelo abajo."
-        );
-      } else if (event.error === "no-speech") {
-        setErrorMsg(
-          "No se detectó voz. Acércate al micrófono y mantén presionado mientras hablas."
-        );
-      } else {
-        setShowTextInput(true);
-        setErrorMsg(
-          "El dictado por voz del navegador no respondió. Puedes escribirlo abajo sin límites."
-        );
-      }
-      setStage(items.length > 0 ? "confirm" : "ready");
-    };
-
-    recognition.onend = () => {
-      if (ended) return;
-      ended = true;
-      if (!isHoldingRef.current) {
-        finishRecording();
-      }
-    };
-
-    try {
-      startTimeRef.current = Date.now();
-      recognition.start();
-      setStage("recording");
-      timerRef.current = window.setInterval(() => {
-        const sec = Math.floor((Date.now() - startTimeRef.current) / 1000);
-        setElapsedSec(sec);
-      }, 200);
-    } catch {
-      isHoldingRef.current = false;
-      setShowTextInput(true);
-      setErrorMsg(
-        "No se pudo iniciar el micrófono. Escribe abajo los productos para procesarlos."
-      );
-      setStage(items.length > 0 ? "confirm" : "ready");
-    }
+    launchRecognitionAttempt(SpeechCtor, 0);
   };
 
-  const stopHolding = () => {
-    if (!isHoldingRef.current) return;
-    isHoldingRef.current = false;
+  const stopRecording = () => {
+    if (!recordingActiveRef.current || stoppingRef.current) return;
+    stoppingRef.current = true;
 
     const recognition = recognitionRef.current;
     if (recognition) {
@@ -322,12 +315,33 @@ export function VoiceScreen({
         finishRecording();
         return;
       }
-      // Safety timeout in case browser doesn't fire onend promptly
       finalizeTimeoutRef.current = window.setTimeout(() => {
         finishRecording();
-      }, 500);
+      }, 650);
     } else {
       finishRecording();
+    }
+  };
+
+  const handleMicPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    if (recordingActiveRef.current) {
+      pointerDownAtRef.current = 0;
+      stopRecording();
+      return;
+    }
+    pointerDownAtRef.current = Date.now();
+    startRecording();
+  };
+
+  const handleMicPointerUp = () => {
+    if (!recordingActiveRef.current || pointerDownAtRef.current === 0) return;
+    const heldMs = Date.now() - pointerDownAtRef.current;
+    pointerDownAtRef.current = 0;
+    // If user intentionally held down (>= 550ms), releasing finishes recording;
+    // quick tap leaves recording open hands-free until they pause or tap Detener.
+    if (heldMs >= 550) {
+      stopRecording();
     }
   };
 
@@ -451,45 +465,46 @@ export function VoiceScreen({
               type="button"
               layout
               whileTap={{ scale: 0.96 }}
-              onPointerDown={(e) => {
-                e.preventDefault();
-                startRecording(e.pointerId, e.currentTarget);
-              }}
-              onPointerUp={stopHolding}
-              onPointerCancel={stopHolding}
+              onPointerDown={handleMicPointerDown}
+              onPointerUp={handleMicPointerUp}
               onKeyDown={(e) => {
                 if ((e.key === " " || e.key === "Enter") && !e.repeat) {
                   e.preventDefault();
-                  startRecording();
-                }
-              }}
-              onKeyUp={(e) => {
-                if (e.key === " " || e.key === "Enter") {
-                  e.preventDefault();
-                  stopHolding();
+                  if (recordingActiveRef.current) {
+                    stopRecording();
+                  } else {
+                    startRecording();
+                  }
                 }
               }}
               onContextMenu={(e) => e.preventDefault()}
-              className={`relative flex select-none touch-none flex-col items-center justify-center rounded-full text-white transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1D4ED8] ${
+              className={`relative flex select-none touch-manipulation flex-col items-center justify-center rounded-full text-white transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1D4ED8] ${
                 isConfirming
                   ? `h-14 w-14 shrink-0 ${micIdleClass}`
                   : stage === "recording"
-                    ? "h-40 w-40 bg-[#DC2626] shadow-[0_12px_30px_rgba(220,38,38,0.3)] sm:h-44 sm:w-44"
-                    : `h-40 w-40 ${micIdleClass} sm:h-44 sm:w-44`
+                    ? "h-36 w-36 bg-[#DC2626] shadow-[0_12px_30px_rgba(220,38,38,0.3)] sm:h-44 sm:w-44"
+                    : `h-36 w-36 ${micIdleClass} sm:h-44 sm:w-44`
               }`}
               aria-label={
                 stage === "recording"
-                  ? "Grabando voz, suelta para terminar"
-                  : "Mantén presionado para dictar"
+                  ? "Grabando voz, toca para terminar"
+                  : "Toca para empezar a dictar"
               }
             >
-              <Mic
-                className={isConfirming ? "h-6 w-6" : "h-12 w-12"}
-                aria-hidden="true"
-              />
+              {stage === "recording" ? (
+                <Square
+                  className="h-9 w-9 fill-current sm:h-10 sm:w-10"
+                  aria-hidden="true"
+                />
+              ) : (
+                <Mic
+                  className={isConfirming ? "h-6 w-6" : "h-11 w-11 sm:h-12 sm:w-12"}
+                  aria-hidden="true"
+                />
+              )}
               {!isConfirming && (
-                <span className="font-display mt-2 text-base font-bold tabular-nums">
-                  {stage === "recording" ? formattedElapsed : "Mantén pulsado"}
+                <span className="font-display mt-2 text-sm font-bold tabular-nums sm:text-base">
+                  {stage === "recording" ? formattedElapsed : "Toca para hablar"}
                 </span>
               )}
             </motion.button>
@@ -509,34 +524,53 @@ export function VoiceScreen({
                 </p>
               ) : (
                 <p className="text-sm text-[#64748B]">
-                  Mantén el micrófono para dictar de nuevo
+                  Toca el micrófono para dictar de nuevo
                 </p>
               )}
             </div>
           ) : (
-            <div className="mt-6 space-y-2">
+            <div className="mt-5 space-y-2.5 sm:mt-6">
               <p className="font-display text-base font-semibold text-[#0F172A] sm:text-lg">
                 {stage === "recording"
                   ? speechDetected
-                    ? "Escuchando... suelta al terminar"
+                    ? "Escuchando... toca el botón al terminar"
                     : "Habla ahora cerca del micrófono..."
-                  : "Mantén presionado el botón mientras hablas"}
+                  : "Toca el botón (o mantenlo pulsado) y habla"}
               </p>
               {stage === "recording" && liveText && (
                 <p className="mx-auto max-w-md rounded-xl bg-[#F8FAFC] px-3.5 py-2 text-sm font-medium text-[#334155]">
                   “{liveText}”
                 </p>
               )}
+              {stage === "recording" && (
+                <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={stopRecording}
+                    className="flex min-h-[44px] items-center gap-2 rounded-xl bg-[#0F172A] px-4 font-display text-sm font-semibold text-white hover:bg-[#1E293B]"
+                  >
+                    <Check className="h-4 w-4" aria-hidden="true" />
+                    <span>Terminar dictado</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelRecording}
+                    className="min-h-[44px] rounded-xl border border-[#CBD5E1] bg-white px-4 font-display text-sm font-semibold text-[#475569] hover:bg-[#F8FAFC]"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
 
         {!isConfirming && (
-          <div className="mt-2 flex flex-col items-center gap-3 w-full max-w-lg">
+          <div className="mt-2 flex w-full max-w-lg flex-col items-center gap-3">
             {(showTextInput || !speechSupported) && (
               <form
                 onSubmit={handleManualTextSubmit}
-                className="flex w-full gap-2 pt-2"
+                className="flex w-full flex-col gap-2 pt-2 min-[420px]:flex-row"
               >
                 <input
                   type="text"
@@ -551,7 +585,7 @@ export function VoiceScreen({
                 />
                 <button
                   type="submit"
-                  className="min-h-[48px] rounded-xl bg-[#0F172A] px-4 font-display text-sm font-semibold text-white hover:bg-[#1E293B]"
+                  className="min-h-[48px] shrink-0 rounded-xl bg-[#0F172A] px-5 font-display text-sm font-semibold text-white hover:bg-[#1E293B]"
                 >
                   Procesar
                 </button>
@@ -590,7 +624,7 @@ export function VoiceScreen({
             exit={{ opacity: 0 }}
             className="mt-5 space-y-5"
           >
-            <div className="flex items-center justify-between px-1">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
               <p className="text-sm font-medium text-[#475569] sm:text-base">
                 Toca cualquier tarjeta para editar sus datos
               </p>
@@ -602,7 +636,7 @@ export function VoiceScreen({
                   setTranscript("");
                   setErrorMsg(null);
                 }}
-                className="flex min-h-[40px] items-center gap-1.5 rounded-xl px-2.5 text-sm font-semibold text-[#475569] hover:bg-[#E2E8F0] hover:text-[#0F172A]"
+                className="flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl px-2.5 text-sm font-semibold text-[#475569] hover:bg-[#E2E8F0] hover:text-[#0F172A]"
               >
                 <RotateCcw className="h-4 w-4" aria-hidden="true" />
                 <span>Reiniciar</span>
@@ -808,7 +842,7 @@ function VoiceItemEditorModal({
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 14, scale: 0.98 }}
         transition={{ duration: 0.16 }}
-        className="w-full max-w-md rounded-t-2xl bg-white p-5 shadow-2xl sm:rounded-2xl sm:p-6"
+        className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl sm:p-6"
       >
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-[#CBD5E1] sm:hidden" />
 

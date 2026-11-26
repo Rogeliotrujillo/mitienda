@@ -150,7 +150,7 @@ export function AddProductModal({
         initial={{ opacity: 0, y: 20, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.16 }}
-        className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-5 shadow-2xl sm:rounded-2xl sm:p-6"
+        className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl sm:p-6"
       >
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-[#CBD5E1] sm:hidden" />
 
@@ -223,7 +223,7 @@ export function AddProductModal({
               type="text"
               value={unit}
               onChange={(e) => setUnit(e.target.value)}
-              className="min-h-[44px] w-full rounded-xl border border-[#CBD5E1] bg-[#F8FAFC] px-3.5 text-sm font-semibold text-[#0F172A] focus:border-[#1D4ED8] focus:bg-white focus:outline-none"
+              className="min-h-[44px] w-full rounded-xl border border-[#CBD5E1] bg-[#F8FAFC] px-3.5 text-base font-semibold text-[#0F172A] focus:border-[#1D4ED8] focus:bg-white focus:outline-none"
             />
           </div>
 
