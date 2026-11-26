@@ -95,12 +95,18 @@ type SupabaseClientAny = import("@supabase/supabase-js").SupabaseClient;
 let supabasePromise: Promise<SupabaseClientAny | null> | null = null;
 
 function normalizeSupabaseUrl(rawUrl: string): string | null {
-  const unquoted = rawUrl.trim().replace(/^["']|["']$/g, "").trim();
+  let unquoted = rawUrl.trim().replace(/^["']|["']$/g, "").trim();
   if (!unquoted) return null;
+  if (!/^https?:\/\//i.test(unquoted)) {
+    unquoted = `https://${unquoted}`;
+  }
   try {
     const parsed = new URL(unquoted);
     if (parsed.protocol !== "https:") return null;
     const host = parsed.hostname.toLowerCase();
+    if (host === "supabase.com" || host === "app.supabase.com") {
+      return null;
+    }
     if (
       host === "localhost" ||
       host === "127.0.0.1" ||
@@ -187,6 +193,15 @@ function throwSupabaseError(
     throw new Error("SUPABASE_MISSING_COLUMN");
   }
   if (
+    msg.includes("fetch failed") ||
+    msg.includes("enotfound") ||
+    msg.includes("econnrefused") ||
+    msg.includes("etimedout") ||
+    msg.includes("network")
+  ) {
+    throw new Error("SUPABASE_NETWORK_ERROR");
+  }
+  if (
     msg.includes("invalid api key") ||
     msg.includes("jwt") ||
     code === "PGRST301"
@@ -198,6 +213,18 @@ function throwSupabaseError(
 
 function getFriendlySupabaseErrorMessage(err: unknown): string | null {
   const code = err instanceof Error ? err.message : "";
+  if (code === "SUPABASE_VITE_PREFIX") {
+    return "En Netlify pusiste VITE_SUPABASE_URL o VITE_SUPABASE_SERVICE_ROLE_KEY. Cámbialas a SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY (sin VITE_) y haz Redeploy (Clear cache and deploy site).";
+  }
+  if (code === "SUPABASE_NOT_CONFIGURED") {
+    return "Faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY en Netlify. Agrégalas en Site configuration > Environment variables (con scope Functions) y vuelve a hacer Deploy.";
+  }
+  if (code === "SUPABASE_INVALID_URL") {
+    return "La variable SUPABASE_URL no es válida. Debe ser exactamente https://<tu-proyecto>.supabase.co (Project URL en Supabase > Settings > API).";
+  }
+  if (code === "SUPABASE_NETWORK_ERROR") {
+    return "No se pudo conectar con Supabase desde el servidor. Verifica que SUPABASE_URL sea exactamente https://<tu-proyecto>.supabase.co.";
+  }
   if (code === "SUPABASE_ANON_KEY_USED") {
     return "En SUPABASE_SERVICE_ROLE_KEY colocaste la llave pública (anon). Reemplázala por la llave secreta service_role.";
   }
@@ -223,14 +250,43 @@ function getFriendlySupabaseErrorMessage(err: unknown): string | null {
   return null;
 }
 
-async function getSupabase(): Promise<SupabaseClientAny | null> {
-  const rawUrl = process.env.SUPABASE_URL || "";
-  const rawKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+function isRunningServerless(explicitServerless?: boolean): boolean {
+  return Boolean(
+    explicitServerless ||
+      process.env.NETLIFY ||
+      process.env.AWS_LAMBDA_FUNCTION_NAME ||
+      process.env.DEPLOY_ID
+  );
+}
+
+async function getSupabase(
+  requireRemote = false
+): Promise<SupabaseClientAny | null> {
+  const rawUrl = (process.env.SUPABASE_URL || "").trim();
+  const rawKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  const hasViteMistake = Boolean(
+    (!rawUrl && process.env.VITE_SUPABASE_URL) ||
+      (!rawKey && process.env.VITE_SUPABASE_SERVICE_ROLE_KEY)
+  );
+
+  if (hasViteMistake) {
+    throw new Error("SUPABASE_VITE_PREFIX");
+  }
+
   const url = normalizeSupabaseUrl(rawUrl);
-  const serviceKey = rawKey.trim().replace(/^["']|["']$/g, "").trim();
+  const serviceKey = rawKey.replace(/^["']|["']$/g, "").trim();
+
+  if (rawUrl && !url) {
+    throw new Error("SUPABASE_INVALID_URL");
+  }
+
   if (!url || !serviceKey) {
+    if (requireRemote) {
+      throw new Error("SUPABASE_NOT_CONFIGURED");
+    }
     return null;
   }
+
   if (!supabasePromise) {
     supabasePromise = import("@supabase/supabase-js").then(({ createClient }) =>
       createClient(url, serviceKey, {
@@ -346,8 +402,10 @@ function mapSupabaseUser(row: SupabaseUserRow): StoredUser {
   };
 }
 
+let requireRemoteDb = false;
+
 async function dbHasUsers(): Promise<boolean> {
-  const supabase = await getSupabase();
+  const supabase = await getSupabase(requireRemoteDb);
   if (supabase) {
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
     if (detectSupabaseKeyType(serviceKey) === "anon") {
@@ -390,7 +448,7 @@ async function dbHasUsers(): Promise<boolean> {
 async function dbFindUserByUsername(
   username: string
 ): Promise<StoredUser | null> {
-  const supabase = await getSupabase();
+  const supabase = await getSupabase(requireRemoteDb);
   if (supabase) {
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
     if (detectSupabaseKeyType(serviceKey) === "anon") {
@@ -411,7 +469,7 @@ async function dbFindUserByUsername(
 }
 
 async function dbFindUserById(userId: string): Promise<StoredUser | null> {
-  const supabase = await getSupabase();
+  const supabase = await getSupabase(requireRemoteDb);
   if (supabase) {
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
     if (detectSupabaseKeyType(serviceKey) === "anon") {
@@ -432,7 +490,7 @@ async function dbFindUserById(userId: string): Promise<StoredUser | null> {
 }
 
 async function dbCreateUser(newUser: StoredUser): Promise<StoredUser | null> {
-  const supabase = await getSupabase();
+  const supabase = await getSupabase(requireRemoteDb);
   if (supabase) {
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
     if (detectSupabaseKeyType(serviceKey) === "anon") {
@@ -487,7 +545,7 @@ async function dbCreateUser(newUser: StoredUser): Promise<StoredUser | null> {
 }
 
 async function dbReadUserStore(userId: string): Promise<UserStoreData> {
-  const supabase = await getSupabase();
+  const supabase = await getSupabase(requireRemoteDb);
   if (supabase) {
     const [metaRes, prodRes, movRes] = await Promise.all([
       supabase
@@ -547,7 +605,7 @@ async function dbWriteUserStore(
   products: StoredProduct[],
   movements: StoredMovement[]
 ): Promise<void> {
-  const supabase = await getSupabase();
+  const supabase = await getSupabase(requireRemoteDb);
   if (supabase) {
     if (products.length > 0) {
       const productRows = products.map((p) => ({
@@ -980,6 +1038,24 @@ let hydrogenCooldownUntil = 0;
 
 function createApiRouter() {
   const router = express.Router();
+
+  router.get("/health", async (_req, res) => {
+    try {
+      const supabase = await getSupabase(false);
+      res.json({
+        ok: true,
+        storage: supabase ? "supabase" : "local",
+        serverless: requireRemoteDb,
+      });
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error:
+          getFriendlySupabaseErrorMessage(err) ||
+          "Error en la configuración del servidor.",
+      });
+    }
+  });
 
   router.get("/auth/status", async (_req, res) => {
     try {
@@ -1470,6 +1546,7 @@ Reglas estrictas:
 }
 
 export function createApiApp(options?: { isServerless?: boolean }): Express {
+  requireRemoteDb = isRunningServerless(options?.isServerless);
   const app = express();
   app.set("trust proxy", 1);
   app.use(express.json({ limit: "15mb" }));

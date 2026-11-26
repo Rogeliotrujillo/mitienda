@@ -16,11 +16,33 @@ export interface UserStoreResponse {
 }
 
 async function parseJsonResponse<T>(res: Response): Promise<T> {
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) {
-    throw new Error(data.error || "Ocurrió un error al conectar con el servidor.");
+  const rawText = await res.text();
+  let parsed: (T & { error?: string }) | null = null;
+  if (rawText) {
+    try {
+      parsed = JSON.parse(rawText) as T & { error?: string };
+    } catch {
+      parsed = null;
+    }
   }
-  return data;
+
+  if (!parsed) {
+    if (rawText.trim().startsWith("<")) {
+      throw new Error(
+        "El servidor /api no respondió JSON. Si subiste solo la carpeta dist a Netlify, despliega el proyecto completo desde GitHub o Netlify CLI para activar netlify/functions."
+      );
+    }
+    throw new Error(
+      `Ocurrió un error al conectar con el servidor (${res.status}).`
+    );
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      parsed.error || "Ocurrió un error al conectar con el servidor."
+    );
+  }
+  return parsed;
 }
 
 export async function fetchAuthStatus(): Promise<AuthStatusResponse> {
